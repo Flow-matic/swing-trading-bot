@@ -1,7 +1,3 @@
-# swing-trading-bot
-
----
-
 # Swing Trading Bot
 
 This repository contains a swing trading bot that uses historical stock data, technical indicators, and AI to execute trades. Inspired by "Holly" from Trade Ideas, this bot automates swing trading strategies.
