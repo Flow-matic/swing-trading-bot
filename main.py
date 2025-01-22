@@ -1,17 +1,21 @@
 # swing_trading_bot/main.py
+from dotenv import load_dotenv
+import os
+import time
 
 # Required Libraries
 import pandas as pd
 import ta
 from alpaca_trade_api.rest import REST, TimeFrame
 from sklearn.ensemble import RandomForestClassifier
-import time
-import os
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configuration
-API_KEY = os.getenv('ALPACA_API_KEY')
-SECRET_KEY = os.getenv('ALPACA_SECRET_KEY')
-BASE_URL = 'https://paper-api.alpaca.markets'
+API_KEY = os.getenv("APCA_API_KEY_ID")
+SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
+BASE_URL = "https://paper-api.alpaca.markets"  # For paper trading
 SYMBOL = "AAPL"
 TIMEFRAME = TimeFrame.Day
 START_DATE = "2023-01-01"
