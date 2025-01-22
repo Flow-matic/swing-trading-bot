@@ -69,6 +69,8 @@ python main.py
 - **main.py**: The main script that runs the bot.
 - **requirements.txt**: List of required Python packages.
 - **README.md**: Documentation for setting up and running the bot.
+- **cd $(git rev-parse --show-toplevel)**
+- **touch .env**
 
 ## Notes
 
