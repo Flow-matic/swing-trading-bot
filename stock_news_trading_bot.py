@@ -11,10 +11,14 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 import joblib
 import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Stock API endpoint (Alpha Vantage for stocks, removed crypto)
 URL = "https://www.alphavantage.co/query"
-API_KEY = "YOUR_ALPHA_VANTAGE_API_KEY"
+API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
 
 # Initialize data
 price_history = []
@@ -129,7 +133,7 @@ if __name__ == "__main__":
     print(f"[{datetime.now()}] Bot started.")
     while True:
         try:
-            execute_bot("MSFT")  # Example: Predict Apple stock (AAPL)
+            execute_bot("AAPL")  # Example: Predict Apple stock (AAPL)
             time.sleep(300)  # 5-minute interval to match stock market data update
         except KeyboardInterrupt:
             print("Bot stopped by user.")
