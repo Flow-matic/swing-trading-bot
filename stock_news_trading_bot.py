@@ -11,125 +11,181 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 import joblib
 import os
+from dotenv import load_dotenv
 
-# Stock API endpoint (Using Alpha Vantage for stocks)
-ALPHA_VANTAGE_API_KEY = "YOUR_API_KEY"
+load_dotenv()
+
+# API and data
+ALPHA_VANTAGE_API_KEY = ""
+ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
+if ALPHA_VANTAGE_API_KEY is None:
+    raise ValueError("ALPHA_VANTAGE_API_KEY environment variable not set!")
+
 STOCK_SYMBOL = "AAPL"
-URL = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={STOCK_SYMBOL}&interval=5min&apikey={ALPHA_VANTAGE_API_KEY}"
+INTRADAY_INTERVAL = "5min"  # Make this configurable
+PRICE_HISTORY_FILE = "price_history.npy"
+VOLUME_HISTORY_FILE = "volume_history.npy"
+FEATURES_FILE = "features.npy"
+LABELS_FILE = "labels.npy"
+MODEL_FILE = "stock_model.h5"
+SCALER_FILE = "scaler.pkl"
 
-# Initialize data
+# Initialize
 price_history = []
 volume_history = []
 features = []
 labels = []
 model = None
-scaler = None  # Initialize scaler to None
+scaler = None
 
-# Logging configuration
+# Logging
 logging.basicConfig(filename="bot.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+# --- API Handling and Rate Limiting ---
+def get_market_data(retries=3, retry_delay=60):
+    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={STOCK_SYMBOL}&interval={INTRADAY_INTERVAL}&outputsize=full&apikey={ALPHA_VANTAGE_API_KEY}&datatype=json"
+
+    for attempt in range(retries):
+        try:
+            response = requests.get(url)
+            response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+            data = response.json()
+
+            if "Error Message" in data:
+                raise ValueError(data["Error Message"])
+
+            if "Information" in data and "Thank you for using Alpha Vantage" in data["Information"]:  # Rate limited
+                wait_time = retry_delay * (2**attempt) # Exponential backoff
+                print(f"Rate limited. Retrying in {wait_time} seconds (attempt {attempt + 1}/{retries})...")
+                time.sleep(wait_time)
+                continue # next retry attempt
+
+            return data  # Success!
+
+        except requests.exceptions.RequestException as e:
+            print(f"Request Error (attempt {attempt + 1}/{retries}): {e}")
+            if attempt < retries - 1:
+                time.sleep(retry_delay)  # Wait before retrying
+            else:
+                raise  # Re-raise the exception after all retries fail
+        except json.JSONDecodeError as e:
+            print(f"JSON Error (attempt {attempt + 1}/{retries}): {e}")
+            if attempt < retries - 1:
+                time.sleep(retry_delay)
+            else:
+                raise
+
+    return None  # All retries failed
+
+# --- Data Loading/Saving ---
 def load_model():
     global model, scaler
-    if os.path.exists("stock_model.h5") and os.path.exists("scaler.pkl"):
-        model = create_model()
-        model.load_weights("stock_model.h5")
-        scaler = joblib.load("scaler.pkl")
-        print("Model and scaler loaded from file.")
-    else:
-        print("No saved model found. Training required.")
+    try:
+        model = Sequential() # You must initialize the model architecture before loading weights.
+        model.add(LSTM(50, activation='relu', input_shape=(1, 10))) # Example: Assuming 10 features
+        model.add(Dropout(0.2))
+        model.add(LSTM(50, activation='relu'))
+        model.add(Dropout(0.2))
+        model.add(Dense(1))
+        model.compile(optimizer='adam', loss='mse') # You must compile the model before loading weights.
 
-def save_data():
-    np.save("price_history.npy", price_history)
-    np.save("volume_history.npy", volume_history)
-    np.save("features.npy", features)
-    np.save("labels.npy", labels)
-    print("Historical data saved.")
+        model.load_weights(MODEL_FILE)
+        scaler = joblib.load(SCALER_FILE)
+        print("Model and scaler loaded.")
+    except (OSError, ValueError) as e:  # Handle file not found or other errors during loading
+        print(f"Error loading model: {e}. Training required.")
+
+def save_model():
+    if model and scaler:
+        model.save_weights(MODEL_FILE)  # Save only weights
+        joblib.dump(scaler, SCALER_FILE)
+        print("Model and scaler saved.")
 
 def load_data():
     global price_history, volume_history, features, labels
-    if os.path.exists("price_history.npy"):
-        price_history = np.load("price_history.npy").tolist()
-    if os.path.exists("volume_history.npy"):
-        volume_history = np.load("volume_history.npy").tolist()
-    if os.path.exists("features.npy"):
-        features = np.load("features.npy").tolist()
-    if os.path.exists("labels.npy"):
-        labels = np.load("labels.npy").tolist()
-    print("Historical data loaded.")
-
-def get_market_data():
     try:
-        response = requests.get(URL)
-        response.raise_for_status()
-        data = response.json()
-        latest_time = list(data["Time Series (5min)"].keys())[0]
-        market_data = data["Time Series (5min)"][latest_time]
-        return {
-            "last_price": float(market_data["4. close"]),
-            "volume": float(market_data["5. volume"]),
-            "high": float(market_data["2. high"]),
-            "low": float(market_data["3. low"]),
-            "close": float(market_data["4. close"])
-        }
-    except Exception as e:
-        logging.error(f"Error fetching market data: {e}")
-        print(f"Error fetching market data: {e}")
-        return None
+        price_history = np.load(PRICE_HISTORY_FILE).tolist()
+        volume_history = np.load(VOLUME_HISTORY_FILE).tolist()
+        features = np.load(FEATURES_FILE).tolist()
+        labels = np.load(LABELS_FILE).tolist()
+        print("Historical data loaded.")
+    except OSError:
+        print("No historical data found. Starting from scratch.")
 
+def save_data():
+    np.save(PRICE_HISTORY_FILE, price_history)
+    np.save(VOLUME_HISTORY_FILE, volume_history)
+    np.save(FEATURES_FILE, features)
+    np.save(LABELS_FILE, labels)
+    print("Historical data saved.")
+
+# --- Technical Indicators ---
+def calculate_technical_indicators():
+    df = pd.DataFrame({
+        "close": price_history[-20:],  # Use a rolling window (e.g., 20 periods)
+        "volume": volume_history[-20:]
+    })
+
+    # Example: Simple Moving Average (SMA)
+    df['SMA_5'] = df['close'].rolling(window=5).mean()
+    df['SMA_10'] = df['close'].rolling(window=10).mean()
+
+    # Example: Relative Strength Index (RSI)
+    delta = df['close'].diff()
+    up = delta.clip(lower=0)
+    down = -1 * delta.clip(upper=0)
+    df['RSI_14'] = up.rolling(window=14).mean() / down.rolling(window=14).mean() * 100
+
+    # Example: Volume Average
+    df['Volume_Average_5'] = df['volume'].rolling(window=5).mean()
+
+    # ... Add more indicators as needed ...
+
+    return df.iloc[-1].to_dict()  # Return the last row as a dictionary
+
+# --- Model Training ---
+def create_model(): # This function is crucial and was missing.
+    model = Sequential()
+    model.add(LSTM(50, activation='relu', input_shape=(1, 10))) # Example: Assuming 10 features
+    model.add(Dropout(0.2))
+    model.add(LSTM(50, activation='relu'))
+    model.add(Dropout(0.2))
+    model.add(Dense(1))
+    model.compile(optimizer='adam', loss='mse')
+    return model
+
+def train_model():
+    global model, scaler
+    features_np = np.array(features)
+    labels_np = np.array(labels)
+
+    # Check for minimum data points for training
+    if len(features_np) < 50:
+        print("Not enough data points for training.")
+        return
+
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(features_np, labels_np, test_size=0.2, random_state=42)
+
+    # Scale features
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    # Reshape for LSTM (samples, timesteps, features)
+    X_train_scaled = X_train_scaled.reshape(X_train_scaled.shape[0], 1, X_train_scaled.shape[1])
+    X_test_scaled = X_test_scaled.reshape(X_test_scaled.shape[0], 1, X_test_scaled.shape[1])
+
+    model = create_model() # Create the model instance
+    model.fit(X_train_scaled, y_train, epochs=10, batch_size=32) # Adjust epochs and batch size
+
+    # Evaluate the model
+    y_pred = model.predict(X_test_scaled)
+    mse = mean_squared_error(y_test, y_pred)
+    print(f"Mean Squared Error: {mse}")
+
+    save_model()
+
+# --- Bot Execution ---
 def execute_bot():
     global model, scaler
-    
-    market_data = get_market_data()
-    if market_data:
-        price_history.append(market_data["last_price"])
-        volume_history.append(market_data["volume"])
-
-        print(f"Price history length: {len(price_history)}, Volume history length: {len(volume_history)}")
-
-        if len(price_history) >= 21:
-            features_row = calculate_technical_indicators()
-            if features_row:
-                label = 1 if price_history[-1] > price_history[-2] else 0
-                features.append(list(features_row.values()))
-                labels.append(label)
-                save_data()
-
-                if model is None and len(features) >= 50:
-                    train_model()
-
-                if model and scaler:
-                    try:
-                        features_scaled = scaler.transform([list(features_row.values())]).reshape(1, 1, -1)
-                        prediction = model.predict(features_scaled)[0][0]
-
-                        direction = "UP" if prediction > 0.5 else "DOWN"
-                        confidence = abs(prediction - 0.5) * 2
-
-                        now = datetime.now()
-                        timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-
-                        print("=" * 50)
-                        print(f"[{timestamp}] Stock Price Prediction")
-                        print("=" * 50)
-                        print(f"Current Price: {market_data['last_price']:.2f}")
-                        print(f"Prediction: Price will go {direction} in the next interval.")
-                        print(f"Confidence: {confidence * 100:.2f}%")
-                        print("=" * 50)
-                    except Exception as e:
-                        print(f"Error during prediction: {e}")
-                        logging.exception("Error during prediction")
-
-if __name__ == "__main__":
-    load_data()
-    load_model()
-    print(f"[{datetime.now()}] Bot started.")
-    while True:
-        try:
-            execute_bot()
-            time.sleep(300)  # Set to 5 minutes
-        except KeyboardInterrupt:
-            print("Bot stopped by user.")
-            break
-        except Exception as e:
-            print(f"Error: {e}")
-            logging.error(f"Error: {e}")
