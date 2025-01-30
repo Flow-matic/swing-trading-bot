@@ -46,10 +46,11 @@ def save_data():
     np.save("volume_history.npy", volume_history)
     np.save("features.npy", features)
     np.save("labels.npy", labels)
-    print("Historical data saved.")
+    joblib.dump(scaler, "scaler.pkl")
+    print("Historical data and scaler saved.")
 
 def load_data():
-    global price_history, volume_history, features, labels
+    global price_history, volume_history, features, labels, scaler
     if os.path.exists("price_history.npy"):
         price_history = np.load("price_history.npy").tolist()
     if os.path.exists("volume_history.npy"):
@@ -58,7 +59,9 @@ def load_data():
         features = np.load("features.npy").tolist()
     if os.path.exists("labels.npy"):
         labels = np.load("labels.npy").tolist()
-    print("Historical data loaded.")
+    if os.path.exists("scaler.pkl"):
+        scaler = joblib.load("scaler.pkl")
+    print("Historical data and scaler loaded.")
 
 def get_stock_data(symbol):
     try:
@@ -85,6 +88,18 @@ def get_stock_data(symbol):
         print(f"Error fetching stock data: {e}")
         return None
 
+def calculate_technical_indicators():
+    if len(price_history) < 21:
+        return None
+    df = pd.DataFrame({"close": price_history, "volume": volume_history})
+    df["SMA_10"] = df["close"].rolling(window=10).mean()
+    df["EMA_10"] = df["close"].ewm(span=10, adjust=False).mean()
+    df["RSI"] = 100 - (100 / (1 + (df["close"].diff().clip(lower=0).rolling(window=14).mean() /
+                                  df["close"].diff().clip(upper=0).abs().rolling(window=14).mean())))
+    df["MACD"] = df["close"].ewm(span=12, adjust=False).mean() - df["close"].ewm(span=26, adjust=False).mean()
+    df.dropna(inplace=True)
+    return df.iloc[-1].to_dict()
+
 def execute_bot(symbol):
     global model, scaler
     market_data = get_stock_data(symbol)
@@ -94,38 +109,37 @@ def execute_bot(symbol):
 
         print(f"Price history length: {len(price_history)}, Volume history length: {len(volume_history)}")
 
-        if len(price_history) >= 21:
-            features_row = calculate_technical_indicators()
-            if features_row:
-                label = 1 if price_history[-1] > price_history[-2] else 0
-                features.append(list(features_row.values()))
-                labels.append(label)
-                save_data()
+        features_row = calculate_technical_indicators()
+        if features_row:
+            label = 1 if price_history[-1] > price_history[-2] else 0
+            features.append(list(features_row.values()))
+            labels.append(label)
+            save_data()
 
-                if model is None and len(features) >= 50:
-                    train_model()
+            if model is None and len(features) >= 50:
+                train_model()
 
-                if model and scaler:
-                    try:
-                        features_scaled = scaler.transform([list(features_row.values())]).reshape(1, 1, -1)
-                        prediction = model.predict(features_scaled)[0][0]
+            if model and scaler:
+                try:
+                    features_scaled = scaler.transform([list(features_row.values())]).reshape(1, 1, -1)
+                    prediction = model.predict(features_scaled)[0][0]
 
-                        direction = "UP" if prediction > 0.5 else "DOWN"
-                        confidence = abs(prediction - 0.5) * 2
+                    direction = "UP" if prediction > 0.5 else "DOWN"
+                    confidence = abs(prediction - 0.5) * 2
 
-                        now = datetime.now()
-                        timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+                    now = datetime.now()
+                    timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
 
-                        print("=" * 50)
-                        print(f"[{timestamp}] Stock Price Prediction")
-                        print("=" * 50)
-                        print(f"Current Price: {market_data['last_price']:.2f}")
-                        print(f"Prediction: Price will go {direction} in the next epoch.")
-                        print(f"Confidence: {confidence * 100:.2f}%")
-                        print("=" * 50)
-                    except Exception as e:
-                        print(f"Error during prediction: {e}")
-                        logging.exception("Error during prediction")
+                    print("=" * 50)
+                    print(f"[{timestamp}] Stock Price Prediction")
+                    print("=" * 50)
+                    print(f"Current Price: {market_data['last_price']:.2f}")
+                    print(f"Prediction: Price will go {direction} in the next epoch.")
+                    print(f"Confidence: {confidence * 100:.2f}%")
+                    print("=" * 50)
+                except Exception as e:
+                    print(f"Error during prediction: {e}")
+                    logging.exception("Error during prediction")
 
 if __name__ == "__main__":
     load_data()
